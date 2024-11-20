@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic YouTube Video Grid with Sync</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.2.47/vue.global.min.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+        }
+        #controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        input {
+            margin: 5px;
+            padding: 5px;
+            width: 200px;
+        }
+        button, select {
+            margin: 5px;
+            padding: 5px 10px;
+        }
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); /* Dynamically adjust */
+            gap: 10px;
+            max-width: 98%;
+            margin: auto;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%; /* 16:9 aspect ratio */
+        }
+        .video-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="controls">
+            <div>
+                <input v-for="(url, index) in videoUrls" 
+                       :key="index" 
+                       v-model="videoUrls[index]" 
+                       :placeholder="'YouTube URL ' + (index + 1)">
+            </div>
+            <button @click="loadVideos">Load Videos</button>
+            <button @click="playAll">Play All</button>
+            <button @click="pauseAll">Pause All</button>
+            <button @click="stopAll">Stop All</button>
+            <select v-model="gridColumns">
+                <option value="1">1 Column</option>
+                <option value="2">2 Columns</option>
+                <option value="3">3 Columns</option>
+                <option value="4">4 Columns</option>
+            </select>
+        </div>
+        <div class="video-grid" :style="{ 'grid-template-columns': `repeat(${gridColumns}, 1fr)` }">
+            <div v-for="(player, index) in players" :key="index" class="video-container">
+                <div :id="`player-${index}`"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    videoUrls: Array(12).fill(''), // Default: Up to 12 video slots
+                    players: [], // Array of YouTube player objects
+                    gridColumns: 4, // Default grid layout
+                    syncInterval: null, // Interval for synchronization
+                };
+            },
+            mounted() {
+                // Extract video IDs from URL parameters when the page loads
+                this.parseUrlParams();
+                window.onYouTubeIframeAPIReady = this.loadVideos; // Initialize YouTube players
+            },
+            methods: {
+                parseUrlParams() {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const maxVideos = 12; // Support up to 12 videos
+                    for (let i = 1; i <= maxVideos; i++) {
+                        const param = urlParams.get(`v${i}`);
+                        if (param) {
+                            const videoId = this.extractVideoId(param);
+                            if (videoId) {
+                                this.videoUrls[i - 1] = `https://www.youtube.com/watch?v=${videoId}`;
+                            }
+                        }
+                    }
+                },
+                extractVideoId(url) {
+                    // Regular expression to extract the YouTube video ID
+                    const videoIdMatch = url.match(
+                        /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/
+                    );
+                    return videoIdMatch ? videoIdMatch[1] : null;
+                },
+                loadVideos() {
+                    if (window.YT) {
+                        // Clear existing players
+                        this.players.forEach(player => player && player.destroy());
+                        this.players = [];
+
+                        // Initialize new players
+                        this.videoUrls.forEach((url, index) => {
+                            if (!url) return;
+                            const videoId = this.extractVideoId(url);
+                            if (!videoId) return;
+
+                            this.players[index] = new YT.Player(`player-${index}`, {
+                                videoId: videoId,
+                                playerVars: {
+                                    autoplay: 0,
+                                    controls: 1,
+                                    mute: 0,
+                                },
+                                events: {
+                                    onStateChange: (event) => {
+                                        if (event.data === YT.PlayerState.PLAYING) {
+                                            this.startSync(); // Start syncing when playing
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                    }
+                },
+                startSync() {
+                    // Stop any existing synchronization interval
+                    if (this.syncInterval) clearInterval(this.syncInterval);
+
+                    this.syncInterval = setInterval(() => {
+                        // Get current time of all players
+                        const currentTimes = this.players.map(player => player?.getCurrentTime() || 0);
+                        const leaderTime = Math.max(...currentTimes); // The max time to lead synchronization
+
+                        this.players.forEach((player, index) => {
+                            if (!player) return;
+                            const currentTime = currentTimes[index];
+                            // Sync all players to the leader time if they are off by more than 0.3 seconds
+                            if (Math.abs(currentTime - leaderTime) > 0.3) {
+                                player.seekTo(leaderTime, true);
+                            }
+                        });
+                    }, 500);
+                },
+                playAll() {
+                    this.players.forEach(player => player && player.playVideo());
+                },
+                pauseAll() {
+                    this.players.forEach(player => player && player.pauseVideo());
+                },
+                stopAll() {
+                    this.players.forEach(player => {
+                        if (player) {
+                            player.stopVideo();
+                            player.seekTo(0);
+                        }
+                    });
+                    clearInterval(this.syncInterval); // Clear sync interval when stopping
+                },
+            },
+        }).mount('#app');
+    </script>
+</body>
+</html>
